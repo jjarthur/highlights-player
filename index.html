@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="robots" content="noindex, nofollow">
+<title>Highlights</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 14px "Roboto", Arial, sans-serif; }
+  #stage { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 1rem; background: #000; }
+  .start { font-size: 1.25rem; padding: 0.9rem 2rem; border-radius: 999px; border: 0; background: #fff; color: #000; cursor: pointer; }
+  .fixture { font-size: 1.1rem; color: #aaa; }
+  #msg { color: #aaa; }
+  [hidden] { display: none !important; }
+
+  #video { position: relative; width: 100%; max-width: 1280px; aspect-ratio: 16 / 9; background: #000; overflow: hidden; }
+  #stage:fullscreen #video { max-width: none; width: 100%; height: 100%; aspect-ratio: auto; }
+  #video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #shield { position: absolute; inset: 0; cursor: pointer; }
+  #video.idle #shield { cursor: none; }
+  #barTop { position: absolute; top: 0; left: 0; right: 0; height: max(5.5%, 40px); background: #000; pointer-events: none; }
+  #endCover { position: absolute; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; color: #aaa; font-size: 1.2rem; }
+
+  /* YouTube-style control bar */
+  #chrome { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 12px 4px; background: linear-gradient(transparent, rgba(0,0,0,.75)); transition: opacity .25s; }
+  #video.idle #chrome { opacity: 0; pointer-events: none; }
+  #progress { position: relative; height: 16px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
+  #track { position: relative; width: 100%; height: 3px; background: rgba(255,255,255,.2); transition: height .1s; }
+  #progress:hover #track { height: 5px; }
+  #loaded { position: absolute; inset: 0 auto 0 0; background: rgba(255,255,255,.4); }
+  #played { position: absolute; inset: 0 auto 0 0; background: #f00; }
+  #knob { position: absolute; top: 50%; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: #f00; transform: scale(0); transition: transform .1s; }
+  #progress:hover #knob, #progress.drag #knob { transform: scale(1); }
+  #row { display: flex; align-items: center; height: 44px; gap: 4px; }
+  .btn { width: 44px; height: 44px; padding: 0; border: 0; background: none; color: #fff; cursor: pointer; opacity: .9; display: grid; place-items: center; }
+  .btn:hover { opacity: 1; }
+  .btn svg { width: 28px; height: 28px; fill: #fff; }
+  #cc { position: relative; }
+  #cc.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 8px; height: 3px; border-radius: 2px; background: #f00; }
+  #vol { display: flex; align-items: center; }
+  #volSlider { width: 0; opacity: 0; transition: width .2s, opacity .2s; accent-color: #fff; cursor: pointer; margin: 0; }
+  #vol:hover #volSlider, #volSlider:focus { width: 64px; opacity: 1; margin: 0 8px 0 2px; }
+  #time { font-variant-numeric: tabular-nums; padding: 0 8px; white-space: nowrap; color: #ddd; }
+  .spacer { flex: 1; }
+  #rate { font: inherit; color: #fff; background: none; border: 0; cursor: pointer; padding: 0 8px; appearance: none; -webkit-appearance: none; text-align: center; }
+  #rate option { color: #000; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="fixture" id="fixture" hidden></div>
+  <button class="start" id="start" hidden>▶ Play</button>
+  <div id="video" hidden>
+    <div id="player"></div>
+    <div id="shield"></div>
+    <div id="barTop"></div>
+    <div id="endCover" hidden>Full time 🙂</div>
+    <div id="chrome">
+      <div id="progress"><div id="track"><div id="loaded"></div><div id="played"></div><div id="knob"></div></div></div>
+      <div id="row">
+        <button class="btn" id="toggle" title="Play (k)"></button>
+        <div id="vol">
+          <button class="btn" id="mute" title="Mute (m)"></button>
+          <input id="volSlider" type="range" min="0" max="100" value="50" aria-label="Volume">
+        </div>
+        <span id="time">0:00 / 0:00</span>
+        <span class="spacer"></span>
+        <button class="btn" id="cc" title="Subtitles/closed captions (c)"></button>
+        <select id="rate" title="Playback speed">
+          <option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option>
+          <option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+        </select>
+        <button class="btn" id="fs" title="Full screen (f)"></button>
+      </div>
+    </div>
+  </div>
+  <p id="msg" hidden></p>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const ICON = {
+    play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>',
+    replay: '<svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.3 0 6 2.7 6 6s-2.7 6-6 6-6-2.7-6-6H4c0 4.4 3.6 8 8 8s8-3.6 8-8-3.6-8-8-8z"/></svg>',
+    volHigh: '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>',
+    volLow: '<svg viewBox="0 0 24 24"><path d="M5 9v6h4l5 5V4L9 9H5zm13.5 3A4.5 4.5 0 0 0 16 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>',
+    volOff: '<svg viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0 0 14 8v2.2l2.5 2.5V12zM19 12c0 .9-.2 1.8-.5 2.6l1.5 1.5A8.8 8.8 0 0 0 21 12a9 9 0 0 0-7-8.8v2.1a7 7 0 0 1 5 6.7zM4.3 3 3 4.3 7.7 9H3v6h4l5 5v-6.7l4.3 4.2c-.7.5-1.4.9-2.3 1.2v2.1a9 9 0 0 0 3.7-1.8l2 2 1.3-1.3L4.3 3zM12 4 9.9 6.1 12 8.2V4z"/></svg>',
+    cc: '<svg viewBox="0 0 24 24"><path d="M19 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1z"/></svg>',
+    fsOn: '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>',
+    fsOff: '<svg viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>',
+  };
+  const params = new URLSearchParams(location.search);
+  const id = params.get("v") || "";
+  let player, S, dragging = false, barTimer, idleTimer;
+
+  const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+
+  $("toggle").innerHTML = ICON.pause;
+  $("mute").innerHTML = ICON.volHigh;
+  $("fs").innerHTML = ICON.fsOn;
+  $("cc").innerHTML = ICON.cc;
+
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) {
+    $("msg").textContent = "No video specified.";
+    $("msg").hidden = false;
+  } else {
+    if (params.get("f")) { $("fixture").textContent = params.get("f"); $("fixture").hidden = false; }
+    $("start").hidden = false;
+    const s = document.createElement("script");
+    s.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(s);
+  }
+
+  $("start").onclick = () => {
+    $("start").hidden = true;
+    $("fixture").hidden = true;
+    $("video").hidden = false;
+    S = YT.PlayerState;
+    player = new YT.Player("player", {
+      host: "https://www.youtube-nocookie.com",
+      videoId: id,
+      playerVars: { autoplay: 1, cc_load_policy: 0, controls: 0, rel: 0, playsinline: 1, fs: 0, iv_load_policy: 3, disablekb: 1 },
+      events: { onReady: (e) => { e.target.playVideo(); restoreVolume(); setCaptions(false); }, onStateChange: onState },
+    });
+    setInterval(tick, 200);
+    wake();
+  };
+
+  // Black bar over YouTube's title: shown whenever not playing, and briefly after playback (re)starts.
+  function onState(e) {
+    const playing = e.data === S.PLAYING;
+    $("toggle").innerHTML = e.data === S.ENDED ? ICON.replay : playing ? ICON.pause : ICON.play;
+    $("toggle").title = playing ? "Pause (k)" : "Play (k)";
+    $("endCover").hidden = e.data !== S.ENDED;
+    clearTimeout(barTimer);
+    $("barTop").hidden = false;
+    if (playing && !captionsOn) { try { player.unloadModule("captions"); } catch (_) {} }
+    if (playing) barTimer = setTimeout(() => { $("barTop").hidden = true; }, 4500);
+    wake();
+  }
+
+  function tick() {
+    if (!player || !player.getDuration) return;
+    const d = player.getDuration() || 0, t = player.getCurrentTime() || 0;
+    if (!dragging && d) $("played").style.width = $("knob").style.left = (t / d) * 100 + "%";
+    $("loaded").style.width = (player.getVideoLoadedFraction() || 0) * 100 + "%";
+    if (!dragging) $("time").textContent = fmt(t) + " / " + fmt(d);
+  }
+
+  // Controls auto-hide while playing, like YouTube.
+  function wake() {
+    $("video").classList.remove("idle");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (player && player.getPlayerState && player.getPlayerState() === S.PLAYING && !dragging) $("video").classList.add("idle");
+    }, 2500);
+  }
+  $("video").addEventListener("mousemove", wake);
+  $("video").addEventListener("touchstart", wake, { passive: true });
+  $("video").addEventListener("mouseleave", () => { if (player && player.getPlayerState && player.getPlayerState() === S.PLAYING) $("video").classList.add("idle"); });
+
+  const toggle = () => {
+    const st = player.getPlayerState();
+    if (st === S.ENDED) { player.seekTo(0, true); player.playVideo(); }
+    else st === S.PLAYING ? player.pauseVideo() : player.playVideo();
+  };
+  const skip = (n) => player.seekTo(Math.max(0, player.getCurrentTime() + n), true);
+
+  const volIcon = (v) => v === 0 ? ICON.volOff : v < 50 ? ICON.volLow : ICON.volHigh;
+  // Remember volume/mute between videos (per browser). Defaults to 50%, unmuted.
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem("hl-volume")) || {}; } catch (_) { return {}; } },
+    set(v) { try { localStorage.setItem("hl-volume", JSON.stringify(v)); } catch (_) {} },
+  };
+  function restoreVolume() {
+    const { volume = 50, muted = false } = store.get();
+    setVolume(volume);
+    if (muted) toggleMute();
+  }
+  function setVolume(v) {
+    v = Math.max(0, Math.min(100, v));
+    player.setVolume(v);
+    v === 0 ? player.mute() : player.unMute();
+    $("volSlider").value = v;
+    $("mute").innerHTML = volIcon(v);
+    if (v > 0) store.set({ volume: v, muted: false });
+    else store.set({ ...store.get(), muted: true });
+  }
+  const toggleMute = () => {
+    if (player.isMuted() || player.getVolume() === 0) setVolume(store.get().volume || player.getVolume() || 50);
+    else { player.mute(); $("volSlider").value = 0; $("mute").innerHTML = ICON.volOff; store.set({ ...store.get(), muted: true }); }
+  };
+  // Captions: the IFrame API has no official toggle; loadModule/unloadModule("captions") is the widely used workaround.
+  let captionsOn = false;
+  function setCaptions(on) {
+    captionsOn = on;
+    try { on ? player.loadModule("captions") : player.unloadModule("captions"); } catch (_) {}
+    $("cc").classList.toggle("on", on);
+  }
+  const toggleCaptions = () => setCaptions(!captionsOn);
+
+  const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : $("stage").requestFullscreen();
+  document.addEventListener("fullscreenchange", () => { $("fs").innerHTML = document.fullscreenElement ? ICON.fsOff : ICON.fsOn; });
+
+  $("shield").onclick = toggle;
+  $("shield").ondblclick = fullscreen;
+  $("toggle").onclick = toggle;
+  $("mute").onclick = toggleMute;
+  $("cc").onclick = toggleCaptions;
+  $("volSlider").oninput = () => setVolume(+$("volSlider").value);
+  $("rate").onchange = () => player.setPlaybackRate(+$("rate").value);
+  $("fs").onclick = fullscreen;
+
+  // Scrubbing
+  const frac = (e) => { const r = $("track").getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+  const preview = (e) => {
+    $("played").style.width = $("knob").style.left = frac(e) * 100 + "%";
+    $("time").textContent = fmt(frac(e) * player.getDuration()) + " / " + fmt(player.getDuration());
+  };
+  $("progress").addEventListener("pointerdown", (e) => {
+    dragging = true; $("progress").classList.add("drag"); $("progress").setPointerCapture(e.pointerId); preview(e);
+  });
+  $("progress").addEventListener("pointermove", (e) => { if (dragging) preview(e); });
+  $("progress").addEventListener("pointerup", (e) => {
+    dragging = false; $("progress").classList.remove("drag");
+    player.seekTo(frac(e) * player.getDuration(), true);
+  });
+
+  // YouTube keyboard shortcuts
+  document.addEventListener("keydown", (e) => {
+    if (!player || !player.getPlayerState || e.target.tagName === "SELECT") return;
+    const k = e.key.toLowerCase();
+    const acts = {
+      " ": toggle, k: toggle, j: () => skip(-10), l: () => skip(10),
+      arrowleft: () => skip(-5), arrowright: () => skip(5),
+      arrowup: () => setVolume(player.getVolume() + 5), arrowdown: () => setVolume(player.getVolume() - 5),
+      m: toggleMute, f: fullscreen, c: toggleCaptions,
+    };
+    if (acts[k]) { e.preventDefault(); acts[k](); wake(); }
+    else if (/^[0-9]$/.test(k)) { player.seekTo(player.getDuration() * (+k / 10), true); wake(); }
+  });
+</script>
+</body>
+</html>
