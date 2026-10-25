@@ -20,6 +20,8 @@
   #shield { position: absolute; inset: 0; cursor: pointer; }
   #video.idle #shield { cursor: none; }
   #barTop { position: absolute; top: 0; left: 0; right: 0; height: max(5.5%, 40px); background: #000; pointer-events: none; }
+  /* During an ad, let taps through to YouTube's own ad controls (e.g. "Skip ad"). */
+  #video.ad #shield, #video.ad #chrome { display: none; }
   #endCover { position: absolute; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; color: #aaa; font-size: 1.2rem; }
 
   /* YouTube-style control bar */
@@ -92,7 +94,7 @@
   };
   const params = new URLSearchParams(location.search);
   const id = params.get("v") || "";
-  let player, S, dragging = false, barTimer, idleTimer;
+  let player, S, dragging = false, barTimer, idleTimer, wantPlay = true, lastT = -1, stalledSince = 0;
 
   const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 
@@ -146,6 +148,11 @@
     if (!dragging && d) $("played").style.width = $("knob").style.left = (t / d) * 100 + "%";
     $("loaded").style.width = (player.getVideoLoadedFraction() || 0) * 100 + "%";
     if (!dragging) $("time").textContent = fmt(t) + " / " + fmt(d);
+    // The IFrame API doesn't report ads, but the video's clock stops while one plays.
+    const stalled = wantPlay && !dragging && t === lastT && player.getPlayerState() !== S.ENDED;
+    if (!stalled) stalledSince = Date.now();
+    lastT = t;
+    $("video").classList.toggle("ad", Date.now() - stalledSince > 3000);
   }
 
   // Controls auto-hide while playing, like YouTube.
@@ -162,6 +169,7 @@
 
   const toggle = () => {
     const st = player.getPlayerState();
+    wantPlay = st !== S.PLAYING;
     if (st === S.ENDED) { player.seekTo(0, true); player.playVideo(); }
     else st === S.PLAYING ? player.pauseVideo() : player.playVideo();
   };
