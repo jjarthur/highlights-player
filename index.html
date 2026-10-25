@@ -47,6 +47,7 @@
   .spacer { flex: 1; }
   #rate { font: inherit; color: #fff; background: none; border: 0; cursor: pointer; padding: 0 8px; appearance: none; -webkit-appearance: none; text-align: center; }
   #rate option { color: #000; }
+  #dbg { width: 100%; max-width: 1280px; height: 40vh; box-sizing: border-box; border: 0; background: #111; color: #0f0; font: 11px monospace; }
 </style>
 </head>
 <body>
@@ -78,6 +79,7 @@
     </div>
   </div>
   <p id="msg" hidden></p>
+  <textarea id="dbg" readonly hidden></textarea>
 </div>
 <script>
   const $ = (id) => document.getElementById(id);
@@ -248,6 +250,30 @@
     if (acts[k]) { e.preventDefault(); acts[k](); wake(); }
     else if (/^[0-9]$/.test(k)) { player.seekTo(player.getDuration() * (+k / 10), true); wake(); }
   });
+
+  // ?debug=1: log what the IFrame API reports (for working out how to detect ads). Titles are stripped.
+  if (params.has("debug")) {
+    $("dbg").hidden = false;
+    const log = (m) => { $("dbg").value += new Date().toISOString().slice(14, 23) + " " + m + "\n"; $("dbg").scrollTop = $("dbg").scrollHeight; };
+    const noisy = new Set(["currentTime", "videoBytesLoaded", "videoLoadedFraction", "mediaReferenceTime", "currentTimeLastUpdated_", "progressState"]);
+    const seen = {};
+    window.addEventListener("message", (e) => {
+      if (!/youtube/.test(e.origin)) return;
+      let m; try { m = typeof e.data === "string" ? JSON.parse(e.data) : e.data; } catch (_) { return; }
+      if (m.event !== "infoDelivery" && m.event !== "initialDelivery") return log("EVENT " + m.event + " " + JSON.stringify(m.info).slice(0, 200));
+      for (let [k, v] of Object.entries(m.info || {})) {
+        if (noisy.has(k)) continue;
+        if (k === "videoData" && v) { v = { ...v }; delete v.title; delete v.author; }
+        if (["playlist", "videoEmbedCode", "apiInterface", "debugText"].includes(k)) v = Array.isArray(v) ? v.length : typeof v;
+        const j = JSON.stringify(v);
+        if (seen[k] !== j) { seen[k] = j; log(k + " = " + (j || "").slice(0, 400)); }
+      }
+    });
+    setInterval(() => {
+      if (!player || !player.getCurrentTime) return;
+      log("tick st=" + player.getPlayerState() + " t=" + player.getCurrentTime().toFixed(1) + " d=" + player.getDuration() + " vid=" + (player.getVideoData() || {}).video_id);
+    }, 1000);
+  }
 </script>
 </body>
 </html>
